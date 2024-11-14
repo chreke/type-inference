@@ -24,6 +24,11 @@ main = hspec $ do
 
   describe "Functions" $
     do
-      let ctx = Map.empty
-      it "should accept a well-formed function" $
-        infer ctx (Lambda ((Bool, Int), "x", Conditional (Variable "x", IntLiteral, IntLiteral))) `shouldBe` Just (Function (Bool, Int))
+      let negation = Lambda ((Bool, Bool), "x", Conditional (Variable "x", BoolLiteral, BoolLiteral))
+      let toBinary = Lambda ((Bool, Int), "x", Conditional (Variable "x", IntLiteral, IntLiteral))
+      do
+        let ctx = Map.empty
+        it "should typecheck x -> if x then 1 else 0" $
+          infer ctx toBinary `shouldBe` Just (Function (Bool, Int))
+        it "should typecheck x -> if x then false else true" $
+          infer ctx negation `shouldBe` Just (Function (Bool, Bool))
