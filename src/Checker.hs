@@ -1,6 +1,6 @@
 module Checker where
 
--- import Control.Monad.State
+import Control.Monad.State
 import Data.Map (Map)
 import qualified Data.Map as Map
 
@@ -27,63 +27,61 @@ data Term
 
 type Context = Map String Type
 
-type LVars = [(LVar, Type)]
+data AppState = AppState
+  { appCounter :: Int,
+    appConstraints :: [(Type, Type)]
+  }
 
-data State = State {
-  stateCounter :: Int,
-  stateLVars :: LVars
-} deriving Show
+newLVar :: State AppState LVar
+newLVar = do
+  s <- get
+  let next = appCounter s + 1
+  put s {appCounter = next}
+  return (LVar next)
 
-initState :: State
-initState = State {
-  stateCounter = 0,
-  stateLVars = []
-}
+unify :: Type -> Type -> State AppState ()
+unify t1 t2 = do
+  s <- get
+  put s {appConstraints = (t1, t2) : appConstraints s}
+  return ()
 
-newLVar :: State -> (LVar, State)
-newLVar state =
-  (LVar (stateCounter state), state { stateCounter = stateCounter state + 1})
-
-unify :: State -> LVar -> Type -> State
-unify state lvar t  =
-  let lvars = stateLVars state
-      lvars' = (lvar, t) : lvars
-  in state { stateLVars = lvars' }
-
-infer :: State -> Context -> Term -> (Type, State)
-infer state _ IntLiteral = (Int, state)
-infer state _ BoolLiteral = (Bool, state)
-infer state ctx (Conditional (cond, term1, term2)) =
+infer :: Context -> Term -> State AppState Type
+infer _ IntLiteral = pure Int
+infer _ BoolLiteral = pure Bool
+infer ctx (Conditional (cond, term1, term2)) =
   do
-    let (ctvar, state) = newLVar state
-    let (tvar1, state) = newLVar state
-    let (tvar2, state) = newLVar state
-    let state = unify state ctvar Bool
-    let (ct, state) = infer state ctx cond
-    let (t1, state) = infer state ctx term1
-    let (t2, state) = infer state ctx term2
-    let state = unify state ctvar ct
-    let state = unify state tvar1 t1
-    let state = unify state tvar2 t2
-    let state = unify state tvar1 (TVar tvar2)
-    (TVar tvar1, state)
-infer state ctx (Variable name) =
-  (Map.findWithDefault Undefined name ctx, state)
-infer state ctx (Lambda (arg, body)) =
+    ct <- infer ctx cond
+    unify ct Bool
+    t1 <- infer ctx term1
+    t2 <- infer ctx term2
+    unify t1 t2
+    return t1
+infer ctx (Lambda (arg, body)) =
   do
-    let (tvar1, state) = newLVar state
-    let t1 = TVar tvar1
+    lvar <- newLVar
+    let t1 = TVar lvar
     let ctx' = Map.insert arg t1 ctx
-    let (t2, state) = infer state ctx' body
-    (Function (t1, t2), state)
-infer state ctx (Application (fn, arg)) =
+    t2 <- infer ctx' body
+    return (Function (t1, t2))
+infer ctx (Variable name) =
+  pure $ Map.findWithDefault Undefined name ctx
+infer ctx (Application (fn, arg)) =
   do
-    let (tvarf, state) = newLVar state
-    let (tvar1, state) = newLVar state
-    let (tvar2, state) = newLVar state
-    let (ft, state) = infer state ctx fn
-    let (t2, state) = infer state ctx arg
-    let state = unify state tvarf ft
-    let state = unify state tvarf (Function (TVar tvar1, TVar tvar2))
-    let state = unify state tvar1 t2
-    (TVar tvar2, state)
+    ft <- infer ctx fn
+    at <- infer ctx arg
+    lvar1 <- newLVar
+    lvar2 <- newLVar
+    let t1 = TVar lvar1
+    let t2 = TVar lvar2
+    unify t1 at
+    unify ft (Function (t1, t2))
+    return t2
+
+check :: Term -> (Type, AppState)
+check term =
+  let ctx = Map.empty
+      initalState = AppState {
+        appConstraints = [],
+        appCounter = 0
+      }
+  in runState (infer ctx term) initalState
