@@ -3,6 +3,7 @@ module Checker where
 import Control.Monad.State
 import Data.Map (Map)
 import qualified Data.Map as Map
+import Text.Printf
 
 newtype LVar
   = LVar Int
@@ -31,6 +32,7 @@ data AppState = AppState
   { appCounter :: Int,
     appConstraints :: [(Type, Type)]
   }
+  deriving (Show)
 
 newLVar :: State AppState LVar
 newLVar = do
@@ -77,11 +79,47 @@ infer ctx (Application (fn, arg)) =
     unify ft (Function (t1, t2))
     return t2
 
+solve :: Type -> Type -> Map LVar Type -> Either String (Map LVar Type)
+solve t1 t2 subst | t1 == t2 = Right subst
+solve (TVar v) t subst = solveVar v t subst
+solve t (TVar v) subst = solveVar v t subst
+solve (Function (in1, out1)) (Function (in2, out2)) subst =
+  solve in1 in2 subst >>= solve out1 out2
+solve t1 t2 _subst = Left (printf "Could not unify %s with %s" (show t1) (show t2))
+
+occursCheck :: LVar -> Type -> Map LVar Type -> Bool
+occursCheck v t subst =
+  case t of
+    TVar v' | v == v' -> True
+    TVar v' ->
+      case Map.lookup v' subst of
+        Just t' -> occursCheck v t' subst
+        Nothing -> False
+    Function (t1, t2) ->
+      occursCheck v t1 subst || occursCheck v t2 subst
+    _ -> False
+
+-- NOTE: Recursively try to resolve variables on the LHS and RHS of the equation
+solveVar :: LVar -> Type -> Map LVar Type -> Either String (Map LVar Type)
+solveVar v t subst =
+  let res1 = Map.lookup v subst
+      res2 =
+        case t of
+          TVar v' -> Map.lookup v' subst
+          _ -> Nothing
+   in case (res1, res2) of
+        (Just t', _) -> solve t' t subst
+        (_, Just t') -> solve (TVar v) t' subst
+        _ | occursCheck v t subst ->
+          Left (printf "Self-reference: %s %s" (show v) (show t))
+        _ -> Right $ Map.insert v t subst
+
 check :: Term -> (Type, AppState)
 check term =
   let ctx = Map.empty
-      initalState = AppState {
-        appConstraints = [],
-        appCounter = 0
-      }
-  in runState (infer ctx term) initalState
+      initalState =
+        AppState
+          { appConstraints = [],
+            appCounter = 0
+          }
+   in runState (infer ctx term) initalState
